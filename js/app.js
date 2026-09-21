@@ -2,7 +2,7 @@ import * as S from './store.js';
 import { parsePairs } from './parse.js';
 import { extractPairs, testConnection, MODELS, isImage, isPDF } from './ai.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const $app = document.getElementById('app');
 const $tabbar = document.getElementById('tabbar');
 const $sheetRoot = document.getElementById('sheet-root');
@@ -53,6 +53,7 @@ const ICONS = {
 const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 
 function toast(message, { action, onAction, duration = 3200 } = {}) {
+  $toastRoot.replaceChildren();
   const el = document.createElement('div');
   el.className = 'toast';
   el.innerHTML = `<span>${esc(message)}</span>${action ? `<button type="button">${esc(action)}</button>` : ''}`;
@@ -215,6 +216,7 @@ function viewHome() {
       ${all.due > 0 ? `<button type="button" class="btn primary block" data-action="quick-review">${icon('clock')}今日の復習 ${all.due}語をはじめる</button>` : ''}
     </section>
 
+    ${installTip()}
     <section class="section">
       <div class="section-head">
         <h2>単語帳</h2>
@@ -227,6 +229,25 @@ function viewHome() {
           <a class="btn primary" href="#/add">${icon('plus')}単語を追加する</a>
         </div>`}
     </section>`;
+}
+
+// ホーム画面への追加案内（スマホのブラウザで開いているときだけ）
+let installEvent = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; if (parseRoute().name === 'home') render(); });
+window.addEventListener('appinstalled', () => { installEvent = null; S.setSetting('installTipDismissed', true); render(); });
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+function installTip() {
+  if (isStandalone() || S.getSettings().installTipDismissed) return '';
+  if (!installEvent && !isIOS()) return '';
+  const how = installEvent
+    ? 'アプリのように全画面で開け、オフラインでも使えます。'
+    : 'Safari の共有ボタン（四角から矢印が出ているアイコン）→「ホーム画面に追加」。全画面で開け、単語帳のデータも消えにくくなります。';
+  return `<aside class="install-tip">${icon('download')}
+    <div><b>ホーム画面に追加すると便利です</b><p>${how}</p>${installEvent ? '<button type="button" class="btn small primary" data-action="install-app">インストール</button>' : ''}</div>
+    <button type="button" class="icon-btn small" data-action="dismiss-install-tip" aria-label="閉じる">${icon('x')}</button>
+  </aside>`;
 }
 
 function deckCard(deck, i) {
@@ -481,18 +502,18 @@ function renderAddAI(body) {
   const files = addUI.files;
   body.innerHTML = `
     ${hasKey ? '' : `<div class="notice">${icon('key')}<div><b>はじめにAPIキーの登録が必要です</b><p>AI読み取りは Claude API を使います。キーはこの端末の中だけに保存されます。</p><a class="btn small primary" href="#/settings">設定を開く</a></div></div>`}
-    <label class="dropzone ${addUI.busy ? 'busy' : ''}" id="dropzone">
-      <input id="file-input" type="file" accept="image/*,application/pdf" multiple hidden ${addUI.busy ? 'disabled' : ''}>
-      <span class="dropzone-icon">${icon('image')}</span>
-      <b>スクリーンショット・写真を選ぶ</b>
-      <small>複数枚まとめてOK。字幕つき動画の画面、単語リスト、ノートの写真、PDFなど。英語と訳をAIが見つけて対応づけます。</small>
-    </label>
     ${files.length ? `<ul class="thumbs ${addUI.busy ? 'scanning' : ''}">${files.map((f, i) => `
       <li>${isPDF(f) ? `<div class="thumb-pdf">PDF<small>${esc(f.name)}</small></div>` : `<img src="${thumbURL(f)}" alt="${esc(f.name)}">`}
         ${addUI.busy ? '' : `<button type="button" class="thumb-x" data-action="remove-file" data-index="${i}" aria-label="取り除く">${icon('x')}</button>`}
       </li>`).join('')}</ul>` : ''}
-    ${addUI.busy ? `<div class="scan-status"><span class="spinner"></span><span id="scan-text">${esc(scanText())}</span></div>` : `
-      <button type="button" class="btn primary block big" data-action="run-ocr" ${files.length && hasKey ? '' : 'disabled'}>${icon('sparkle')}AIで読み取る${files.length ? `（${files.length}件）` : ''}</button>`}
+    <label class="dropzone ${files.length ? 'compact' : ''} ${addUI.busy ? 'busy' : ''}" id="dropzone">
+      <input id="file-input" type="file" accept="image/*,application/pdf" multiple hidden ${addUI.busy ? 'disabled' : ''}>
+      <span class="dropzone-icon">${icon(files.length ? 'plus' : 'image')}</span>
+      <b>${files.length ? 'さらに追加する' : 'スクリーンショット・写真を選ぶ'}</b>
+      <small>複数枚まとめてOK。字幕つき動画の画面、単語リスト、ノートの写真、PDFなど。英語と訳をAIが見つけて対応づけます。</small>
+    </label>
+    ${addUI.busy ? `<div class="scan-status"><span class="spinner"></span><span id="scan-text">${esc(scanText())}</span></div>` : files.length ? `
+      <div class="sticky-cta"><button type="button" class="btn primary grow big" data-action="run-ocr" ${hasKey ? '' : 'disabled'}>${icon('sparkle')}AIで読み取る（${files.length}件）</button></div>` : ''}
     <p class="hint">デスクトップでは、画像をこの画面にドラッグするか、コピーした画像を貼り付けても追加できます。</p>`;
 
   const input = $('#file-input', body);
@@ -629,7 +650,7 @@ function renderReview(body) {
         <div class="review-fields">
           <input type="text" data-review="en" value="${esc(r.en)}" placeholder="英語" lang="en" autocapitalize="off" spellcheck="false" aria-label="英語">
           <input type="text" data-review="ja" value="${esc(r.ja)}" placeholder="日本語" lang="ja" aria-label="日本語">
-          <input type="text" class="note" data-review="note" value="${esc(r.note)}" placeholder="メモ（任意）" aria-label="メモ">
+          <textarea class="note" data-review="note" rows="1" placeholder="メモ（任意）" aria-label="メモ">${esc(r.note)}</textarea>
           <div class="tags">${r.dup ? '<span class="tag warn">登録済み</span>' : ''}${r.generated ? '<span class="tag ai">AI訳</span>' : ''}${!r.ja ? '<span class="tag warn">訳なし</span>' : ''}</div>
         </div>
       </li>`).join('')}
@@ -639,8 +660,15 @@ function renderReview(body) {
       <button type="button" class="btn primary grow" data-action="review-commit" id="review-commit" ${n ? '' : 'disabled'}>${n}語を単語帳に追加</button>
     </div>`;
 
+  $$('textarea.note', body).forEach(autoGrow);
   body.addEventListener('input', onReviewInput);
   body.addEventListener('change', onReviewInput);
+}
+
+// field-sizing 未対応のブラウザ（Safariなど）向けに高さを内容へ合わせる
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 2 + 'px';
 }
 
 function onReviewInput(e) {
@@ -650,6 +678,7 @@ function onReviewInput(e) {
   const row = addUI.review[+li.dataset.index];
   if (key === 'checked') { row.checked = e.target.checked; li.classList.toggle('off', !row.checked); }
   else row[key] = e.target.value;
+  if (e.target.matches('textarea')) autoGrow(e.target);
   const n = addUI.review.filter((r) => r.checked).length;
   const btn = $('#review-commit');
   if (btn) { btn.textContent = `${n}語を単語帳に追加`; btn.disabled = !n; }
@@ -837,7 +866,7 @@ function bindFlash(el) {
   el.addEventListener('pointerdown', (e) => {
     if (el.dataset.leaving) return;
     active = true; moved = false; dx = 0; sx = e.clientX; sy = e.clientY;
-    el.setPointerCapture(e.pointerId);
+    try { el.setPointerCapture(e.pointerId); } catch {}
     el.classList.add('dragging');
   });
   el.addEventListener('pointermove', (e) => {
@@ -1045,8 +1074,14 @@ function viewSettings() {
       <h2 class="label">AI読み取り（AI OCR）</h2>
       <div class="card-plain form">
         <label class="field"><span>Claude APIキー</span>
-          <div class="input-row"><input id="api-key" type="password" value="${esc(key)}" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" spellcheck="false"><button type="button" class="btn small ghost" data-action="toggle-key">表示</button></div>
+          <div class="input-row"><input id="api-key" type="password" value="${esc(key)}" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"><button type="button" class="btn small" data-action="paste-key">貼り付け</button><button type="button" class="btn small ghost" data-action="toggle-key">表示</button></div>
         </label>
+        ${key ? '' : `<ol class="steps">
+          <li><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic Console</a> にログインする（初めてなら登録）</li>
+          <li>Billing でクレジットを購入する（少額でOK）</li>
+          <li>API Keys →「Create Key」で発行し、表示されたキーをコピーする</li>
+          <li>この画面で「貼り付け」→「接続テスト」を押す</li>
+        </ol>`}
         <label class="field"><span>モデル</span>
           <select id="model">${MODELS.map((m) => `<option value="${m.id}" ${m.id === s.model ? 'selected' : ''}>${m.label} — ${m.hint}</option>`).join('')}</select>
         </label>
@@ -1108,6 +1143,8 @@ function viewSettings() {
 const actions = {
   'close-sheet': () => closeSheet(),
   'new-deck': () => newDeckSheet(),
+  'install-app': async () => { if (!installEvent) return; installEvent.prompt(); await installEvent.userChoice.catch(() => {}); installEvent = null; render(); },
+  'dismiss-install-tip': () => { S.setSetting('installTipDismissed', true); render(); },
   'quick-review': () => {
     const words = S.getWords().filter((w) => w.en && w.ja && S.isDue(w));
     startSession(words, { ...studyCfg, deckId: 'all', scope: 'due', count: 30, shuffle: true }, '今日の復習');
@@ -1200,6 +1237,16 @@ const actions = {
     answer(true);
     session.typed = '';
     nextCard();
+  },
+  'paste-key': async () => {
+    try {
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) throw new Error('empty');
+      $('#api-key').value = text;
+      toast('貼り付けました。「接続テスト」を押してください');
+    } catch {
+      toast('貼り付けできませんでした。入力欄を長押しして「ペースト」を選んでください', { duration: 5000 });
+    }
   },
   'toggle-key': (el) => { const i = $('#api-key'); i.type = i.type === 'password' ? 'text' : 'password'; el.textContent = i.type === 'password' ? '表示' : '隠す'; },
   'save-key': () => { S.setApiKey($('#api-key').value.trim()); toast($('#api-key').value.trim() ? 'APIキーを保存しました' : 'APIキーを削除しました'); },
