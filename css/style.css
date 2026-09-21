@@ -401,9 +401,9 @@ select { padding-right: 36px; background-image: linear-gradient(45deg, transpare
 .dropzone.over, .dropzone:active { background: var(--accent-soft); border-color: var(--accent); }
 .dropzone.busy { opacity: .5; pointer-events: none; }
 
-.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
-.thumbs li { position: relative; aspect-ratio: 3 / 4; border-radius: 12px; overflow: hidden; border: 1.5px solid var(--ink); background: var(--paper-2); }
-.thumbs img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+.thumbs li { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; border: 1.5px solid var(--ink); background: #0b0f17; }
+.thumbs img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .thumb-pdf { display: grid; place-content: center; gap: 4px; height: 100%; padding: 8px; text-align: center; font-family: var(--font-en); font-weight: 700; font-size: 18px; }
 .thumb-pdf small { font-family: var(--font-ja); font-weight: 400; font-size: 10px; color: var(--ink-2); overflow-wrap: anywhere; }
 .thumb-x { position: absolute; top: 5px; right: 5px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--ink); color: var(--paper); }

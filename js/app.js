@@ -485,7 +485,7 @@ function renderAddAI(body) {
       <input id="file-input" type="file" accept="image/*,application/pdf" multiple hidden ${addUI.busy ? 'disabled' : ''}>
       <span class="dropzone-icon">${icon('image')}</span>
       <b>スクリーンショット・写真を選ぶ</b>
-      <small>複数枚OK・PDFも読めます。英語と訳がばらばらに写っていてもAIが対応づけます。</small>
+      <small>複数枚まとめてOK。字幕つき動画の画面、単語リスト、ノートの写真、PDFなど。英語と訳をAIが見つけて対応づけます。</small>
     </label>
     ${files.length ? `<ul class="thumbs ${addUI.busy ? 'scanning' : ''}">${files.map((f, i) => `
       <li>${isPDF(f) ? `<div class="thumb-pdf">PDF<small>${esc(f.name)}</small></div>` : `<img src="${thumbURL(f)}" alt="${esc(f.name)}">`}
