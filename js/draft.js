@@ -44,13 +44,20 @@ export function saveDraft(draft) {
   timer = setTimeout(() => writeDraft(draft), 300);
 }
 
-async function writeDraft({ deckId, files, review, reviewSource }) {
+// 読み取り結果のように失うと再課金になるものは待たずに保存する
+export function saveDraftNow(draft) {
+  clearTimeout(timer);
+  return writeDraft(draft);
+}
+
+async function writeDraft({ deckId, files, review, reviewSource, partial }) {
   try {
-    if (!files.length && !review) { await tx('readwrite', (s) => s.delete(ID)); return; }
+    if (!files.length && !review && !partial?.length) { await tx('readwrite', (s) => s.delete(ID)); return; }
     const data = {
       deckId,
       review,
       reviewSource,
+      partial: partial || [],
       files: files.map((f) => ({ blob: f.slice(0, f.size, f.type), name: f.name, type: f.type })),
       savedAt: Date.now(),
     };

@@ -1,7 +1,7 @@
 import * as S from './store.js';
 import { parsePairs } from './parse.js';
-import { extractPairs, testConnection, MODELS, isImage, isPDF } from './ai.js';
-import { loadDraft, saveDraft, clearDraft } from './draft.js';
+import { extractPairs, testConnection, MODELS, isImage, isPDF, dedupe } from './ai.js';
+import { loadDraft, saveDraft, saveDraftNow, clearDraft } from './draft.js';
 import { AUTH_ENABLED } from './config.js';
 import * as A from './auth.js';
 
@@ -439,7 +439,7 @@ function deckMenuSheet(deckId) {
 }
 
 // ── 追加（AI読み取り／手入力／テキスト）─────────────
-const addUI = { deckId: null, tab: 'ai', files: [], text: '', review: null, busy: false, progress: null, recent: [] };
+const addUI = { deckId: null, tab: 'ai', files: [], partial: [], text: '', review: null, busy: false, progress: null, recent: [] };
 
 function ensureAddDeck(preferred) {
   const decks = S.getDecks();
@@ -550,6 +550,7 @@ async function runAI({ files = [], text = '' }) {
   await requireDeck();
   addUI.busy = true;
   addUI.progress = null;
+  addUI.partial = [];
   renderAddBody();
   try {
     const items = await extractPairs({
@@ -558,16 +559,26 @@ async function runAI({ files = [], text = '' }) {
       files,
       text,
       onProgress: (p) => { addUI.progress = p; const el = $('#scan-text'); if (el) el.textContent = scanText(); },
+      // 1回分読み終わるごとに結果を端末に保存し、読み終えた写真は外す（途中で画面が閉じても読み直し＝再課金しない）
+      onBatch: (got, done) => {
+        addUI.partial.push(...got);
+        addUI.files = addUI.files.filter((f) => !done.includes(f));
+        saveDraftNow(addUI);
+      },
     });
     addUI.busy = false;
+    addUI.partial = [];
     if (!items.length) { toast('英語と日本語のペアが見つかりませんでした'); renderAddBody(); return; }
     startReview(items, 'ai');
   } catch (e) {
     console.error(e);
     addUI.busy = false;
-    if (e.partial?.length) {
-      startReview(e.partial, 'ai');
-      toast(`途中で止まりました。読めた${e.partial.length}語を表示しています：${e.message}`, { duration: 8000 });
+    const got = dedupe(addUI.partial);
+    addUI.partial = [];
+    if (got.length) {
+      startReview(got, 'ai');
+      const rest = addUI.files.length ? `残り${addUI.files.length}枚は追加後にもう一度読み取れます。` : '';
+      toast(`途中で止まりました。読めた${got.length}語を表示しています。${rest}（${e.message}）`, { duration: 9000 });
       return;
     }
     renderAddBody();
@@ -1217,7 +1228,6 @@ const actions = {
     const rows = addUI.review.filter((r) => r.checked && (r.en.trim() || r.ja.trim()));
     const added = S.addWords(addUI.deckId, rows);
     const deckId = addUI.deckId;
-    if (addUI.reviewSource === 'ai' && !addUI.text.trim()) addUI.files = [];
     if (addUI.reviewSource !== 'ai' || addUI.text.trim()) addUI.text = '';
     addUI.review = null;
     saveDraft(addUI);
@@ -1397,6 +1407,12 @@ async function boot() {
     addUI.review = d.review || null;
     addUI.reviewSource = d.reviewSource;
     if (d.deckId && S.getDeck(d.deckId)) addUI.deckId = d.deckId;
+    if (!addUI.review && d.partial?.length) {
+      startReview(dedupe(d.partial), 'ai');
+      toast(`前回途中まで読み取った${addUI.review.length}語を復元しました${addUI.files.length ? `。残り${addUI.files.length}枚は追加後に読み取れます` : ''}`, { duration: 7000 });
+      if (parseRoute().name !== 'add') go('#/add');
+      return;
+    }
     if (addUI.files.length || addUI.review) {
       addUI.tab = 'ai';
       if (parseRoute().name === 'add') render();

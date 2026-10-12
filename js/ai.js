@@ -165,10 +165,11 @@ async function extractOnce(Anthropic, client, model, blocks, instruction, onProg
  * @param {{apiKey:string, model:string, files?:File[], text?:string, onProgress?:(info:{step:number,total:number,found:number})=>void}} opts
  * @returns {Promise<{en:string, ja:string, note:string, generated:boolean}[]>}
  */
-export async function extractPairs({ apiKey, model, files = [], text = '', onProgress }) {
+export async function extractPairs({ apiKey, model, files = [], text = '', onProgress, onBatch }) {
   if (!apiKey) throw new AIError('APIキーが未設定です。設定画面で登録してください。');
   const Anthropic = await loadSDK();
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: 1 });
+  // 新しいアカウントは1分あたりの上限が低く、枚数が多いと 429 になりやすい。SDK が待ち時間を見て再試行する
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: 6 });
 
   // 画像は数枚ずつ、PDFは1件ずつ、テキストは1回で処理する
   const jobs = [];
@@ -198,6 +199,7 @@ export async function extractPairs({ apiKey, model, files = [], text = '', onPro
       }
       const items = await extractOnce(Anthropic, client, model, blocks, instruction, progress);
       all.push(...items);
+      onBatch?.(items, job.files || []);
     }
   } catch (e) {
     const err = toUserError(Anthropic, e);
@@ -209,7 +211,7 @@ export async function extractPairs({ apiKey, model, files = [], text = '', onPro
 }
 
 // 重複をまとめる
-function dedupe(all) {
+export function dedupe(all) {
   const seen = new Set();
   return all
     .map((it) => ({ en: (it.en || '').trim(), ja: (it.ja || '').trim(), note: (it.note || '').trim(), generated: !!it.generated }))

@@ -1,5 +1,5 @@
 // オフライン対応：同一オリジンのGETを「ネットワーク優先・失敗時はキャッシュ」で返す
-const CACHE = 'tangocho-v4';
+const CACHE = 'tangocho-v5';
 const SHELL = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/store.js', 'js/parse.js', 'js/ai.js', 'js/draft.js', 'js/config.js', 'js/auth.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
