@@ -200,10 +200,16 @@ export async function extractPairs({ apiKey, model, files = [], text = '', onPro
       all.push(...items);
     }
   } catch (e) {
-    throw toUserError(Anthropic, e);
+    const err = toUserError(Anthropic, e);
+    // 途中まで読めた分は捨てずに返す（課金済みの結果を失わないため）
+    err.partial = dedupe(all);
+    throw err;
   }
+  return dedupe(all);
+}
 
-  // 重複をまとめる
+// 重複をまとめる
+function dedupe(all) {
   const seen = new Set();
   return all
     .map((it) => ({ en: (it.en || '').trim(), ja: (it.ja || '').trim(), note: (it.note || '').trim(), generated: !!it.generated }))

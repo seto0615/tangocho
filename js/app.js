@@ -1,6 +1,7 @@
 import * as S from './store.js';
 import { parsePairs } from './parse.js';
 import { extractPairs, testConnection, MODELS, isImage, isPDF } from './ai.js';
+import { loadDraft, saveDraft } from './draft.js';
 
 const APP_VERSION = '1.1.0';
 const $app = document.getElementById('app');
@@ -536,6 +537,7 @@ function addFiles(list) {
   if (ok.length < list.length) toast('画像とPDF以外のファイルは読み取れません');
   if (!ok.length) return;
   addUI.files.push(...ok);
+  saveDraft(addUI);
   if (addUI.tab !== 'ai') addUI.tab = 'ai';
   if (parseRoute().name === 'add') render(); else go('#/add');
 }
@@ -561,6 +563,11 @@ async function runAI({ files = [], text = '' }) {
   } catch (e) {
     console.error(e);
     addUI.busy = false;
+    if (e.partial?.length) {
+      startReview(e.partial, 'ai');
+      toast(`途中で止まりました。読めた${e.partial.length}語を表示しています：${e.message}`, { duration: 8000 });
+      return;
+    }
     renderAddBody();
     toast(e.message || '読み取りに失敗しました', { duration: 6000 });
   }
@@ -632,6 +639,7 @@ function startReview(items, source) {
     return { en: it.en, ja: it.ja, note: it.note || '', generated: !!it.generated, dup, checked: !dup && !!it.en };
   });
   addUI.reviewSource = source;
+  saveDraft(addUI);
   renderAddBody();
   window.scrollTo(0, 0);
 }
@@ -680,6 +688,7 @@ function onReviewInput(e) {
   else row[key] = e.target.value;
   if (e.target.matches('textarea')) autoGrow(e.target);
   const n = addUI.review.filter((r) => r.checked).length;
+  saveDraft(addUI);
   const btn = $('#review-commit');
   if (btn) { btn.textContent = `${n}語を単語帳に追加`; btn.disabled = !n; }
 }
@@ -1166,8 +1175,8 @@ const actions = {
     el.classList.toggle('on', w.star);
     el.setAttribute('aria-pressed', w.star);
   },
-  'add-tab': (el) => { addUI.tab = el.dataset.tab; addUI.review = null; render(); },
-  'remove-file': (el) => { addUI.files.splice(+el.dataset.index, 1); renderAddBody(); },
+  'add-tab': (el) => { addUI.tab = el.dataset.tab; addUI.review = null; saveDraft(addUI); render(); },
+  'remove-file': (el) => { addUI.files.splice(+el.dataset.index, 1); saveDraft(addUI); renderAddBody(); },
   'run-ocr': () => runAI({ files: addUI.files }),
   'parse-text': async () => {
     const pairs = parsePairs(addUI.text);
@@ -1177,8 +1186,8 @@ const actions = {
   },
   'ai-text': () => { if (!addUI.text.trim()) { toast('テキストを入力してください'); return; } runAI({ text: addUI.text }); },
   'remove-recent': (el) => { const id = el.closest('.word').dataset.id; S.deleteWord(id); addUI.recent = addUI.recent.filter((x) => x !== id); renderAddBody(); },
-  'review-toggle-all': () => { const allOn = addUI.review.every((r) => r.checked); addUI.review.forEach((r) => { r.checked = !allOn; }); renderAddBody(); },
-  'review-cancel': () => { addUI.review = null; renderAddBody(); },
+  'review-toggle-all': () => { const allOn = addUI.review.every((r) => r.checked); addUI.review.forEach((r) => { r.checked = !allOn; }); saveDraft(addUI); renderAddBody(); },
+  'review-cancel': () => { addUI.review = null; saveDraft(addUI); renderAddBody(); },
   'review-commit': async () => {
     await requireDeck();
     const rows = addUI.review.filter((r) => r.checked && (r.en.trim() || r.ja.trim()));
@@ -1187,6 +1196,7 @@ const actions = {
     if (addUI.reviewSource === 'ai' && !addUI.text.trim()) addUI.files = [];
     if (addUI.reviewSource !== 'ai' || addUI.text.trim()) addUI.text = '';
     addUI.review = null;
+    saveDraft(addUI);
     go(`#/deck/${deckId}`);
     toast(`${added.length}語を追加しました`);
   },
@@ -1307,6 +1317,19 @@ S.seedIfEmpty();
 applyTheme();
 window.addEventListener('hashchange', render);
 render();
+// 前回読み取り待ち・確認待ちのまま閉じた写真と結果を戻す
+loadDraft().then((d) => {
+  if (!d || addUI.files.length || addUI.review) return;
+  addUI.files = d.files;
+  addUI.review = d.review || null;
+  addUI.reviewSource = d.reviewSource;
+  if (d.deckId && S.getDeck(d.deckId)) addUI.deckId = d.deckId;
+  if (addUI.files.length || addUI.review) {
+    addUI.tab = 'ai';
+    if (parseRoute().name === 'add') render();
+    toast(addUI.review ? '前回の読み取り結果を復元しました' : `前回選んだ写真${addUI.files.length}枚を復元しました`, { duration: 5000 });
+  }
+});
 navigator.storage?.persist?.().catch(() => {});
 if ('speechSynthesis' in window) speechSynthesis.getVoices();
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
