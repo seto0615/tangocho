@@ -1,7 +1,9 @@
 import * as S from './store.js';
 import { parsePairs } from './parse.js';
 import { extractPairs, testConnection, MODELS, isImage, isPDF } from './ai.js';
-import { loadDraft, saveDraft } from './draft.js';
+import { loadDraft, saveDraft, clearDraft } from './draft.js';
+import { AUTH_ENABLED } from './config.js';
+import * as A from './auth.js';
 
 const APP_VERSION = '1.1.0';
 const $app = document.getElementById('app');
@@ -1079,6 +1081,14 @@ function viewSettings() {
   const total = S.getWords().length;
   $app.innerHTML = `
     ${pageHead({ title: '設定' })}
+    ${AUTH_ENABLED && signedInUser ? `<section class="section">
+      <h2 class="label">アカウント</h2>
+      <div class="card-plain form">
+        <p class="muted">${esc(signedInUser.email)} でログイン中。単語帳と学習記録はクラウドに保存され、ほかの端末でも同じ内容が使えます。写真とAPIキーはこの端末の外には出ません。</p>
+        <label class="field"><span>新しいパスワード</span><input id="new-password" type="password" autocomplete="new-password" minlength="8" placeholder="8文字以上"></label>
+        <div class="cta-row"><button type="button" class="btn" data-action="change-password">パスワードを変更</button><button type="button" class="btn ghost danger-text" data-action="sign-out">ログアウト</button></div>
+      </div>
+    </section>` : ''}
     <section class="section">
       <h2 class="label">AI読み取り（AI OCR）</h2>
       <div class="card-plain form">
@@ -1175,6 +1185,20 @@ const actions = {
     el.classList.toggle('on', w.star);
     el.setAttribute('aria-pressed', w.star);
   },
+  'change-password': async () => {
+    const pw = $('#new-password').value;
+    if (pw.length < 8) { toast('パスワードは8文字以上にしてください'); return; }
+    try { await A.changePassword(pw); $('#new-password').value = ''; toast('パスワードを変更しました'); } catch (e) { toast(e.message, { duration: 6000 }); }
+  },
+  'sign-out': () => confirmSheet({
+    title: 'ログアウト',
+    body: '単語帳はクラウドに保存済みです。この端末からは単語データと読み取り待ちの写真を消し、次に開いたときはログイン画面になります。',
+    confirmLabel: 'ログアウトする',
+    onConfirm: async () => {
+      try { await A.signOut(); await clearDraft(); location.hash = '#/'; location.reload(); }
+      catch (e) { toast('クラウドに保存できなかったため、ログアウトを中止しました。通信環境を確認してください。', { duration: 6000 }); }
+    },
+  }),
   'add-tab': (el) => { addUI.tab = el.dataset.tab; addUI.review = null; saveDraft(addUI); render(); },
   'remove-file': (el) => { addUI.files.splice(+el.dataset.index, 1); saveDraft(addUI); renderAddBody(); },
   'run-ocr': () => runAI({ files: addUI.files }),
@@ -1313,23 +1337,75 @@ document.addEventListener('paste', (e) => {
 });
 
 // ── 起動 ────────────────────────────────────────────
-S.seedIfEmpty();
-applyTheme();
-window.addEventListener('hashchange', render);
-render();
-// 前回読み取り待ち・確認待ちのまま閉じた写真と結果を戻す
-loadDraft().then((d) => {
-  if (!d || addUI.files.length || addUI.review) return;
-  addUI.files = d.files;
-  addUI.review = d.review || null;
-  addUI.reviewSource = d.reviewSource;
-  if (d.deckId && S.getDeck(d.deckId)) addUI.deckId = d.deckId;
-  if (addUI.files.length || addUI.review) {
-    addUI.tab = 'ai';
-    if (parseRoute().name === 'add') render();
-    toast(addUI.review ? '前回の読み取り結果を復元しました' : `前回選んだ写真${addUI.files.length}枚を復元しました`, { duration: 5000 });
+let signedInUser = null;
+
+// ログイン画面（招待制。アカウントは管理者が発行する）
+function viewLogin() {
+  $tabbar.innerHTML = '';
+  $tabbar.hidden = true;
+  $app.innerHTML = `
+    <header class="hero"><div class="brand"><h1>Tangocho</h1></div></header>
+    <section class="section">
+      <form id="login-form" class="form card-plain">
+        <p class="muted">招待されたメールアドレスとパスワードでログインしてください。</p>
+        <label class="field"><span>メールアドレス</span><input name="email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
+        <label class="field"><span>パスワード</span><input name="password" type="password" autocomplete="current-password" required></label>
+        <div class="cta-row"><button type="submit" class="btn primary grow">ログイン</button></div>
+        <p class="hint">この端末にある単語帳は、ログインするとそのままアカウントに引き継がれます。</p>
+      </form>
+    </section>`;
+  const form = $('#login-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button');
+    btn.disabled = true;
+    try {
+      await A.signIn(form.email.value, form.password.value);
+      location.reload();
+    } catch (err) {
+      btn.disabled = false;
+      toast(err.message, { duration: 6000 });
+    }
+  });
+}
+
+async function boot() {
+  applyTheme();
+  if (AUTH_ENABLED) {
+    try {
+      signedInUser = await A.currentUser();
+    } catch (e) {
+      $app.innerHTML = `<section class="section"><p class="muted">${esc(e.message)}</p></section>`;
+      return;
+    }
+    if (!signedInUser) { viewLogin(); return; }
+    try {
+      await A.startSync(signedInUser);
+    } catch (e) {
+      console.error(e);
+      toast('クラウドと同期できませんでした。この端末のデータで続けます（通信が戻ると自動で保存します）', { duration: 6000 });
+    }
+    window.addEventListener('tangocho:synced', () => { if (parseRoute().name !== 'session') render(); });
   }
-});
+  S.seedIfEmpty();
+  window.addEventListener('hashchange', render);
+  render();
+  // 前回読み取り待ち・確認待ちのまま閉じた写真と結果を戻す
+  loadDraft().then((d) => {
+    if (!d || addUI.files.length || addUI.review) return;
+    addUI.files = d.files;
+    addUI.review = d.review || null;
+    addUI.reviewSource = d.reviewSource;
+    if (d.deckId && S.getDeck(d.deckId)) addUI.deckId = d.deckId;
+    if (addUI.files.length || addUI.review) {
+      addUI.tab = 'ai';
+      if (parseRoute().name === 'add') render();
+      toast(addUI.review ? '前回の読み取り結果を復元しました' : `前回選んだ写真${addUI.files.length}枚を復元しました`, { duration: 5000 });
+    }
+  });
+}
+
+boot();
 navigator.storage?.persist?.().catch(() => {});
 if ('speechSynthesis' in window) speechSynthesis.getVoices();
 if ('serviceWorker' in navigator && location.protocol === 'https:') {

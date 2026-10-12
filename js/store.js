@@ -322,6 +322,19 @@ export function importJSON(text, mode = 'merge') {
   return { decks: data.decks.length, words: data.words.length };
 }
 
+// ── クラウド同期用 ────────────────────────────────────
+export const getData = () => ({ decks: state.decks, words: state.words, stats: state.stats });
+export function setData(data) {
+  const d = defaultState();
+  state = { ...state, decks: data.decks || [], words: data.words || [], stats: { ...d.stats, ...(data.stats || {}) }, settings: { ...state.settings, seeded: true } };
+  save();
+}
+// ログアウト時：単語データだけ消す（テーマなどの表示設定とAPIキーは残す）
+export function clearLocalData() {
+  state = { ...defaultState(), settings: { ...state.settings, seeded: false } };
+  try { localStorage.removeItem(KEY); } catch {}
+}
+
 export function wipeAll() {
   const settings = { ...state.settings, seeded: true };
   state = { ...defaultState(), settings };

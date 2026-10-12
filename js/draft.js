@@ -59,3 +59,8 @@ async function writeDraft({ deckId, files, review, reviewSource }) {
     console.error('下書きの保存に失敗しました', e);
   }
 }
+
+export function clearDraft() {
+  clearTimeout(timer);
+  return writeDraft({ files: [], review: null });
+}
