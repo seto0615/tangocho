@@ -370,6 +370,7 @@ select { padding-right: 36px; background-image: linear-gradient(45deg, transpare
 .segmented button.on { background: var(--card); color: var(--ink); box-shadow: 0 0 0 1.5px var(--ink), 2px 2px 0 var(--ink); }
 .segmented.wrap { flex-wrap: wrap; }
 .segmented.wrap button { flex: 1 1 30%; }
+@media (max-width: 440px) { .add-tabs .icon { display: none; } .add-tabs button { padding: 4px 2px; font-size: 13px; } }
 
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; margin-top: 10px; font-weight: 500; cursor: pointer; }
 .switch-row > span { display: inline-flex; align-items: center; gap: 8px; }
@@ -428,6 +429,24 @@ select { padding-right: 36px; background-image: linear-gradient(45deg, transpare
 .spinner { width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .file-btn { justify-self: start; cursor: pointer; border: 1.5px dashed var(--ink-3) !important; }
+
+.csv-file { display: flex; align-items: center; gap: 12px; padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.csv-file > .icon { flex: none; width: 26px; height: 26px; }
+.csv-file > div { flex: 1; min-width: 0; display: grid; }
+.csv-file b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csv-file small { font-size: 12.5px; color: var(--ink-2); }
+.card-plain .field.inline + .field.inline { margin-top: 10px; }
+.field.inline.col-map { grid-template-columns: 5.5em 1fr; }
+.field.inline select { min-width: 0; }
+.table-preview { margin-top: 12px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.table-preview table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.table-preview td { padding: 7px 9px; border-bottom: 1px solid var(--line); max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
+.table-preview tr:last-child td { border-bottom: 0; }
+.table-preview tr.head td { font-weight: 700; color: var(--ink-2); background: var(--paper-2); }
+.table-preview td.en, .table-preview td.ja { color: var(--ink); }
+.table-preview td.en { font-family: var(--font-en); }
+.table-preview td.note { color: var(--ink-2); }
+.table-preview tr:not(.head) td.en, .table-preview tr:not(.head) td.ja { background: color-mix(in srgb, var(--marker) 22%, transparent); }
 
 .review-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .review-head p { font-size: 13px; }

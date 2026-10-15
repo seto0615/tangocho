@@ -1,11 +1,12 @@
 import * as S from './store.js';
 import { parsePairs } from './parse.js';
+import { readTableFile, parseTableText, guessColumns, tableToPairs, isTableFile, TABLE_ACCEPT } from './table.js';
 import { extractPairs, testConnection, MODELS, isImage, isPDF, dedupe } from './ai.js';
 import { loadDraft, saveDraft, saveDraftNow, clearDraft } from './draft.js';
 import { AUTH_ENABLED } from './config.js';
 import * as A from './auth.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const $app = document.getElementById('app');
 const $tabbar = document.getElementById('tabbar');
 const $sheetRoot = document.getElementById('sheet-root');
@@ -50,6 +51,7 @@ const ICONS = {
   upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 19.5h14"/>',
   sheet: '<rect x="3.5" y="7.5" width="17" height="9" rx="1.5" fill="currentColor" fill-opacity=".25"/>',
   clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
+  table: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 10h17M3.5 14.5h17M9.5 5v14"/>',
   key: '<circle cx="8" cy="15" r="3.5"/><path d="m10.5 12.5 8-8M15 8l2.5 2.5M17.5 5.5 19.5 7.5"/>',
   flip: '<path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5"/><path d="M20 4v4.5h-4.5"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.5"/><path d="M4 20v-4.5h4.5"/>',
 };
@@ -439,7 +441,7 @@ function deckMenuSheet(deckId) {
 }
 
 // ── 追加（AI読み取り／手入力／テキスト）─────────────
-const addUI = { deckId: null, tab: 'ai', files: [], partial: [], text: '', review: null, busy: false, progress: null, recent: [] };
+const addUI = { deckId: null, tab: 'ai', files: [], partial: [], text: '', table: null, tableText: '', review: null, busy: false, progress: null, recent: [] };
 
 function ensureAddDeck(preferred) {
   const decks = S.getDecks();
@@ -449,9 +451,9 @@ function ensureAddDeck(preferred) {
 
 function viewAdd(deckId, tab) {
   ensureAddDeck(deckId);
-  if (tab && ['ai', 'manual', 'text'].includes(tab)) addUI.tab = tab;
+  if (tab && ['ai', 'csv', 'manual', 'text'].includes(tab)) addUI.tab = tab;
   const decks = S.getDecks();
-  const tabs = [['ai', 'sparkle', 'AI読み取り'], ['manual', 'pencil', '手入力'], ['text', 'text', 'テキスト']];
+  const tabs = [['ai', 'sparkle', 'AI読み取り'], ['csv', 'table', 'CSV'], ['manual', 'pencil', '手入力'], ['text', 'text', 'テキスト']];
 
   $app.innerHTML = `
     ${pageHead({ title: '単語を追加', back: deckId ? `#/deck/${deckId}` : null })}
@@ -463,7 +465,7 @@ function viewAdd(deckId, tab) {
         </select>
       </label>
     </section>
-    <div class="segmented" role="tablist">
+    <div class="segmented add-tabs" role="tablist">
       ${tabs.map(([k, ic, label]) => `<button type="button" role="tab" aria-selected="${addUI.tab === k}" class="${addUI.tab === k ? 'on' : ''}" data-action="add-tab" data-tab="${k}">${icon(ic)}${label}</button>`).join('')}
     </div>
     <div id="add-body"></div>`;
@@ -484,6 +486,7 @@ function renderAddBody() {
   if (!body) return;
   if (addUI.review) return renderReview(body);
   if (addUI.tab === 'ai') renderAddAI(body);
+  else if (addUI.tab === 'csv') renderAddCSV(body);
   else if (addUI.tab === 'manual') renderAddManual(body);
   else renderAddText(body);
 }
@@ -535,6 +538,8 @@ function scanText() {
 }
 
 function addFiles(list) {
+  const table = list.find((f) => isTableFile(f) && !isImage(f) && !isPDF(f));
+  if (table) { loadTable(table); return; }
   const ok = list.filter((f) => isImage(f) || isPDF(f));
   if (ok.length < list.length) toast('画像とPDF以外のファイルは読み取れません');
   if (!ok.length) return;
@@ -583,6 +588,93 @@ async function runAI({ files = [], text = '' }) {
     }
     renderAddBody();
     toast(e.message || '読み取りに失敗しました', { duration: 6000 });
+  }
+}
+
+// CSV・Excelの一括取り込み（AIを使わない・無料）
+function columnLabel(t, i) {
+  const letter = String.fromCharCode(65 + (i % 26));
+  const head = t.header ? t.rows[0][i] : '';
+  const sample = (t.header ? t.rows[1] : t.rows[0])?.[i] || '';
+  const tail = head || (sample ? `例：${sample}` : '');
+  return `${letter}列${tail ? `（${tail.length > 18 ? tail.slice(0, 18) + '…' : tail}）` : ''}`;
+}
+
+function renderAddCSV(body) {
+  const t = addUI.table;
+  if (!t) {
+    body.innerHTML = `
+      <label class="dropzone" id="csv-drop">
+        <input id="csv-input" type="file" accept="${TABLE_ACCEPT}" hidden>
+        <span class="dropzone-icon">${icon('table')}</span>
+        <b>CSV・Excelファイルを選ぶ</b>
+        <small>APIキー不要・無料。英語と日本語の列がある表なら、見出しの有無や列の順番はそのままでOK。どの列が英語か日本語かは自動で判定し、あとから変えられます。</small>
+      </label>
+      <div class="form card-plain csv-paste">
+        <label class="field"><span>または表を貼り付け<small>（スプレッドシートからコピーしたセルなど）</small></span>
+          <textarea id="table-text" rows="5" placeholder="英語,日本語,メモ&#10;apple,りんご,&#10;take off,離陸する,The plane took off.">${esc(addUI.tableText)}</textarea>
+        </label>
+        <div class="cta-row"><button type="button" class="btn" data-action="table-paste">${icon('table')}表として読み込む</button></div>
+      </div>
+      <p class="hint">対応形式：CSV・TSV・テキスト（UTF-8 / Shift_JIS）、Excel（.xlsx / .xls）、Numbers・Googleスプレッドシートは CSV で書き出したもの。取り込みは端末内だけで行い、いまある単語帳に追加されます（上書き・削除はしません）。</p>`;
+    const input = $('#csv-input', body);
+    input.addEventListener('change', () => { if (input.files[0]) loadTable(input.files[0]); input.value = ''; });
+    const dz = $('#csv-drop', body);
+    dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('over'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+    dz.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('over'); if (e.dataTransfer.files[0]) loadTable(e.dataTransfer.files[0]); });
+    $('#table-text', body).addEventListener('input', (e) => { addUI.tableText = e.target.value; });
+    return;
+  }
+  const width = t.rows[0].length;
+  const opts = (sel, none) => `${none ? `<option value="-1" ${sel < 0 ? 'selected' : ''}>使わない</option>` : ''}${[...Array(width).keys()].map((i) => `<option value="${i}" ${i === sel ? 'selected' : ''}>${esc(columnLabel(t, i))}</option>`).join('')}`;
+  const pairs = tableToPairs(t.rows, t);
+  const preview = t.rows.slice(0, 6);
+  const role = (i) => (i === t.en ? 'en' : i === t.ja ? 'ja' : i === t.note ? 'note' : '');
+  body.innerHTML = `
+    <div class="form card-plain">
+      <div class="csv-file">${icon('table')}<div><b>${esc(t.name)}</b><small>${t.rows.length - (t.header ? 1 : 0)}行${t.sheet ? `・シート「${esc(t.sheet)}」` : ''}</small></div>
+        <button type="button" class="btn small ghost" data-action="table-clear">選び直す</button></div>
+      <label class="field inline col-map"><span>英語の列</span><select data-col="en">${opts(t.en)}</select></label>
+      <label class="field inline col-map"><span>日本語の列</span><select data-col="ja">${opts(t.ja)}</select></label>
+      <label class="field inline col-map"><span>メモの列</span><select data-col="note">${opts(t.note, true)}</select></label>
+      <label class="switch-row"><span>1行目は見出し（取り込まない）</span><input type="checkbox" data-col="header" ${t.header ? 'checked' : ''}><i class="switch"></i></label>
+      <div class="table-preview"><table>
+        ${preview.map((r, ri) => `<tr class="${ri === 0 && t.header ? 'head' : ''}">${r.map((c, i) => `<td class="${role(i)}">${esc(c)}</td>`).join('')}</tr>`).join('')}
+      </table></div>
+      ${t.rows.length > preview.length ? `<p class="hint">先頭${preview.length}行を表示しています。</p>` : ''}
+    </div>
+    <div class="sticky-cta"><button type="button" class="btn primary grow big" data-action="table-review" ${pairs.length ? '' : 'disabled'}>${pairs.length}語を確認する</button></div>`;
+  $('.form', body).addEventListener('change', onTableInput);
+}
+
+function onTableInput(e) {
+  const key = e.target.dataset?.col;
+  if (!key || !addUI.table) return;
+  addUI.table[key] = key === 'header' ? e.target.checked : +e.target.value;
+  renderAddBody();
+}
+
+function setTable(name, r, sheet) {
+  if (r.pairs) {
+    // 区切りの無いテキストは1行ずつ自動判定して、そのまま確認画面へ
+    if (!r.pairs.length) { toast('英語と日本語のペアが見つかりませんでした'); return; }
+    requireDeck().then(() => startReview(r.pairs, 'csv'));
+    return;
+  }
+  if (!r.rows?.length) { toast('表の中身が見つかりませんでした'); return; }
+  addUI.table = { name, rows: r.rows, sheet, ...guessColumns(r.rows) };
+  addUI.tab = 'csv';
+  if (parseRoute().name === 'add') render(); else go('#/add');
+}
+
+async function loadTable(file) {
+  try {
+    const r = await readTableFile(file);
+    setTable(file.name, r, r.sheet);
+  } catch (e) {
+    console.error(e);
+    toast(e.message || `「${file.name}」を読み込めませんでした`, { duration: 6000 });
   }
 }
 
@@ -1134,10 +1226,12 @@ function viewSettings() {
         <div class="menu-list flat">
           <button type="button" data-action="export-json">${icon('download')}バックアップを書き出す（JSON）</button>
           <button type="button" data-action="export-csv">${icon('download')}全単語をCSVで書き出す</button>
-          <label class="menu-file">${icon('upload')}バックアップから読み込む<input id="import-json" type="file" accept=".json,application/json" hidden></label>
-          <button type="button" data-action="wipe" class="danger-text">${icon('trash')}すべてのデータを削除</button>
+          <label class="menu-file">${icon('upload')}バックアップから読み込む${accountLocked() ? '（追加のみ）' : ''}<input id="import-json" type="file" accept=".json,application/json" hidden></label>
+          ${accountLocked() ? '' : `<button type="button" data-action="wipe" class="danger-text">${icon('trash')}すべてのデータを削除</button>`}
         </div>
-        <p class="hint">単語帳はこの端末のブラウザに保存されます。機種変更や別の端末で使うときは、バックアップを書き出して読み込んでください。</p>
+        <p class="hint">${accountLocked()
+          ? 'ログイン中のアカウントに保存された単語帳は、まとめて削除・上書きできないようにしています。読み込みやCSV取り込みは、いまのデータへの追加になります。'
+          : '単語帳はこの端末のブラウザに保存されます。機種変更や別の端末で使うときは、バックアップを書き出して読み込んでください。'}</p>
       </div>
     </section>
     <section class="section">
@@ -1152,6 +1246,12 @@ function viewSettings() {
     const file = e.target.files[0];
     if (!file) return;
     const text = await file.text();
+    e.target.value = '';
+    if (accountLocked()) {
+      try { const r = S.importJSON(text, 'merge'); render(); toast(`${r.decks}冊・${r.words}語を追加しました`); }
+      catch (err) { toast(err.message || '読み込めませんでした'); }
+      return;
+    }
     openSheet(`
       <h2 class="sheet-title">バックアップの読み込み</h2>
       <p class="sheet-body">「${esc(file.name)}」をどう読み込みますか？</p>
@@ -1219,6 +1319,14 @@ const actions = {
     await requireDeck();
     startReview(pairs, 'text');
   },
+  'table-paste': () => { if (!addUI.tableText.trim()) { toast('表を貼り付けてください'); return; } setTable('貼り付けた表', parseTableText(addUI.tableText)); },
+  'table-clear': () => { addUI.table = null; renderAddBody(); },
+  'table-review': async () => {
+    const pairs = tableToPairs(addUI.table.rows, addUI.table);
+    if (!pairs.length) return;
+    await requireDeck();
+    startReview(pairs, 'csv');
+  },
   'ai-text': () => { if (!addUI.text.trim()) { toast('テキストを入力してください'); return; } runAI({ text: addUI.text }); },
   'remove-recent': (el) => { const id = el.closest('.word').dataset.id; S.deleteWord(id); addUI.recent = addUI.recent.filter((x) => x !== id); renderAddBody(); },
   'review-toggle-all': () => { const allOn = addUI.review.every((r) => r.checked); addUI.review.forEach((r) => { r.checked = !allOn; }); saveDraft(addUI); renderAddBody(); },
@@ -1228,7 +1336,8 @@ const actions = {
     const rows = addUI.review.filter((r) => r.checked && (r.en.trim() || r.ja.trim()));
     const added = S.addWords(addUI.deckId, rows);
     const deckId = addUI.deckId;
-    if (addUI.reviewSource !== 'ai' || addUI.text.trim()) addUI.text = '';
+    if (addUI.reviewSource === 'csv') { addUI.table = null; addUI.tableText = ''; }
+    else if (addUI.reviewSource !== 'ai' || addUI.text.trim()) addUI.text = '';
     addUI.review = null;
     saveDraft(addUI);
     go(`#/deck/${deckId}`);
@@ -1312,7 +1421,7 @@ const actions = {
   'set-theme': (el) => { S.setSetting('theme', el.dataset.value); applyTheme(); viewSettings(); },
   'export-json': () => download(`tangocho-backup-${S.todayKey()}.json`, S.exportJSON(), 'application/json'),
   'export-csv': () => download(`tangocho-${S.todayKey()}.csv`, S.exportCSV(null), 'text/csv;charset=utf-8'),
-  wipe: () => confirmSheet({ title: 'すべてのデータを削除', body: '単語帳・単語・学習記録をすべて削除します。元に戻せません。先にバックアップの書き出しをおすすめします。', confirmLabel: 'すべて削除する', danger: true, onConfirm: () => { S.wipeAll(); render(); toast('すべてのデータを削除しました'); } }),
+  wipe: () => !accountLocked() && confirmSheet({ title: 'すべてのデータを削除', body: '単語帳・単語・学習記録をすべて削除します。元に戻せません。先にバックアップの書き出しをおすすめします。', confirmLabel: 'すべて削除する', danger: true, onConfirm: () => { S.wipeAll(); render(); toast('すべてのデータを削除しました'); } }),
 };
 
 document.addEventListener('click', (e) => {
@@ -1348,6 +1457,8 @@ document.addEventListener('paste', (e) => {
 
 // ── 起動 ────────────────────────────────────────────
 let signedInUser = null;
+// ログイン中はアカウントのデータを丸ごと消す・置き換える操作を出さない（追加だけ）
+const accountLocked = () => AUTH_ENABLED && !!signedInUser;
 
 // ログイン画面（招待制。アカウントは管理者が発行する）
 function viewLogin() {
