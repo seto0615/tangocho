@@ -1,12 +1,13 @@
 import * as S from './store.js';
 import { parsePairs } from './parse.js';
+import { findDuplicates, pickKeeper, mergedFields } from './dupes.js';
 import { readTableFile, parseTableText, guessColumns, tableToPairs, isTableFile, TABLE_ACCEPT } from './table.js';
 import { extractPairs, testConnection, MODELS, isImage, isPDF, dedupe } from './ai.js';
 import { loadDraft, saveDraft, saveDraftNow, clearDraft } from './draft.js';
 import { AUTH_ENABLED } from './config.js';
 import * as A from './auth.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const $app = document.getElementById('app');
 const $tabbar = document.getElementById('tabbar');
 const $sheetRoot = document.getElementById('sheet-root');
@@ -52,6 +53,7 @@ const ICONS = {
   sheet: '<rect x="3.5" y="7.5" width="17" height="9" rx="1.5" fill="currentColor" fill-opacity=".25"/>',
   clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
   table: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 10h17M3.5 14.5h17M9.5 5v14"/>',
+  broom: '<path d="M14.5 3.5 10 11"/><path d="M7 11.5h7l1.5 2.5c.6 2.6-.5 5-2 6.5H5.5c1-1.5 1.5-4 1.5-6.5z"/><path d="M9 20.5c.6-1.2 1-2.5 1.2-4M12.5 20.5c.5-1.2.9-2.5 1-4"/>',
   key: '<circle cx="8" cy="15" r="3.5"/><path d="m10.5 12.5 8-8M15 8l2.5 2.5M17.5 5.5 19.5 7.5"/>',
   flip: '<path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5"/><path d="M20 4v4.5h-4.5"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.5"/><path d="M4 20v-4.5h4.5"/>',
 };
@@ -153,6 +155,7 @@ function render() {
     case 'study': viewStudy(r.id); break;
     case 'session': viewSession(); break;
     case 'settings': viewSettings(); break;
+    case 'cleanup': S.setSetting('dupCheckedAt', Date.now()); viewCleanup(); break;
     default: viewHome();
   }
   renderTabbar(r.name);
@@ -166,7 +169,7 @@ function renderTabbar(active) {
     ['study', '#/study', 'cards', 'テスト'],
     ['settings', '#/settings', 'settings', '設定'],
   ];
-  const current = active === 'deck' ? 'home' : active;
+  const current = active === 'deck' ? 'home' : active === 'cleanup' ? 'settings' : active;
   $tabbar.innerHTML = tabs.map(([key, href, ic, label]) => `
     <a href="${href}" class="tab ${current === key ? 'active' : ''}" ${current === key ? 'aria-current="page"' : ''}>
       ${icon(ic)}<span>${label}</span>
@@ -222,6 +225,7 @@ function viewHome() {
     </section>
 
     ${installTip()}
+    ${dupTip()}
     <section class="section">
       <div class="section-head">
         <h2>単語帳</h2>
@@ -252,6 +256,18 @@ function installTip() {
   return `<aside class="install-tip">${icon('download')}
     <div><b>ホーム画面に追加すると便利です</b><p>${how}</p>${installEvent ? '<button type="button" class="btn small primary" data-action="install-app">インストール</button>' : ''}</div>
     <button type="button" class="icon-btn small" data-action="dismiss-install-tip" aria-label="閉じる">${icon('x')}</button>
+  </aside>`;
+}
+
+// 重複の見直し案内：見つかったときだけ出す。「あとで」で1週間たたむ
+function dupTip() {
+  if ((S.getSettings().dupSnoozeUntil || 0) > Date.now()) return '';
+  const groups = findDuplicates(S.getWords());
+  if (!groups.length) return '';
+  const words = groups.reduce((n, g) => n + g.words.length, 0);
+  return `<aside class="install-tip dup-tip">${icon('broom')}
+    <div><b>重複していそうな単語が${groups.length}組あります</b><p>同じ単語の二重登録や、複数形・つづり違いなど${words}語。まとめると訳と学習記録を1つに合わせられます。</p><a class="btn small primary" href="#/cleanup">確認する</a></div>
+    <button type="button" class="icon-btn small" data-action="snooze-dup" aria-label="1週間後にもう一度知らせる">${icon('x')}</button>
   </aside>`;
 }
 
@@ -1178,10 +1194,79 @@ function confetti() {
 }
 
 // ── 設定 ────────────────────────────────────────────
+// ── 単語の整理（重複チェック）──────────────────────
+const cleanUI = { filter: 'all', keep: {} };
+const fmtDate = (t) => { const d = new Date(t); return `${d.getMonth() + 1}月${d.getDate()}日`; };
+let cleanGroups = [];
+
+function wordStatus(w) {
+  if (!w.seen) return '未学習';
+  return `${w.seen}回・正解${w.correct || 0}`;
+}
+
+function viewCleanup() {
+  const y = parseRoute().name === 'cleanup' && $('.dup-list') ? window.scrollY : 0;
+  const all = findDuplicates(S.getWords());
+  const same = all.filter((g) => g.kind === 'same');
+  const similar = all.filter((g) => g.kind === 'similar');
+  cleanGroups = cleanUI.filter === 'same' ? same : cleanUI.filter === 'similar' ? similar : all;
+  const chips = [['all', 'すべて', all.length], ['same', '同じ単語', same.length], ['similar', '似ている', similar.length]];
+  const total = S.getWords().length;
+
+  $app.innerHTML = `
+    ${pageHead({ title: '単語の整理', back: '#/settings', sub: `${S.getDecks().length}冊・${total}語をチェック` })}
+    ${all.length ? `
+      <section class="section">
+        <p class="hint no-margin">同じ単語の二重登録と、複数形・活用形・つづり違いで似ている単語を探しました。「まとめる」と、選んだ1語に訳とメモを足し合わせ、学習記録も引き継ぎます。別の意味の単語なら「別の単語」にすると、次回から出なくなります。</p>
+        ${same.length > 1 ? `<button type="button" class="btn block" data-action="merge-all-same">${icon('broom')}同じ単語${same.length}組をまとめて整理</button>` : ''}
+        <div class="chips">${chips.map(([k, label, n]) => `<button type="button" class="chip ${cleanUI.filter === k ? 'on' : ''}" data-action="dup-filter" data-filter="${k}">${label}<small>${n}</small></button>`).join('')}</div>
+      </section>
+      <section class="section"><ul class="dup-list">${cleanGroups.map(dupGroupCard).join('') || '<li class="empty small">この種類の候補はありません</li>'}</ul></section>` : `
+      <section class="section"><div class="empty">
+        <span class="dropzone-icon">${icon('check')}</span>
+        <p class="empty-title">重複していそうな単語はありません</p>
+        <p>単語を追加したら、またここで確認できます。ホームにも、見つかったときだけお知らせが出ます。</p>
+      </div></section>`}`;
+  if (y) window.scrollTo(0, y);
+  $$('.dup-list input[type=radio]').forEach((r) => r.addEventListener('change', () => { cleanUI.keep[r.dataset.group] = r.value; viewCleanup(); }));
+}
+
+function dupGroupCard(g, gi) {
+  const keepId = g.words.some((w) => w.id === cleanUI.keep[g.id]) ? cleanUI.keep[g.id] : pickKeeper(g.words).id;
+  const keep = g.words.find((w) => w.id === keepId);
+  const merged = mergedFields(keep, g.words.filter((w) => w !== keep));
+  return `<li class="dup-group">
+    <div class="dup-head"><span class="tag ${g.kind === 'same' ? 'warn' : 'ai'}">${g.kind === 'same' ? '同じ単語' : '似ている'}</span><small>${esc(g.reason)}</small></div>
+    <div class="dup-words" role="radiogroup" aria-label="残す単語">
+      ${g.words.map((w) => `<label class="dup-word ${w.id === keepId ? 'keep' : ''}">
+        <input type="radio" name="keep-${gi}" value="${w.id}" data-group="${esc(g.id)}" ${w.id === keepId ? 'checked' : ''}>
+        <i class="dup-radio"></i>
+        <span class="dup-text"><b lang="en">${esc(w.en)}</b><span>${esc(w.ja) || '<em>訳なし</em>'}</span>
+        <small>${esc(S.getDeck(w.deckId)?.name || '')}・${wordStatus(w)}${w.star ? '・★' : ''}${w.note ? `・${esc(w.note.length > 24 ? w.note.slice(0, 24) + '…' : w.note)}` : ''}</small></span>
+        ${w.id === keepId ? '<span class="tag">残す</span>' : ''}
+      </label>`).join('')}
+    </div>
+    <p class="dup-result">まとめた後：<b lang="en">${esc(keep.en)}</b> — ${esc(merged.ja)}</p>
+    <div class="cta-row">
+      <button type="button" class="btn ghost" data-action="dup-keep" data-index="${gi}">別の単語</button>
+      <button type="button" class="btn primary" data-action="dup-merge" data-index="${gi}">まとめる</button>
+    </div>
+  </li>`;
+}
+
+function mergeGroup(g) {
+  const keepId = g.words.some((w) => w.id === cleanUI.keep[g.id]) ? cleanUI.keep[g.id] : pickKeeper(g.words).id;
+  const keep = g.words.find((w) => w.id === keepId);
+  const others = g.words.filter((w) => w !== keep);
+  delete cleanUI.keep[g.id];
+  return S.mergeWords(keep.id, others.map((w) => w.id), mergedFields(keep, others));
+}
+
 function viewSettings() {
   const s = S.getSettings();
   const key = S.getApiKey();
   const total = S.getWords().length;
+  const dupCount = findDuplicates(S.getWords()).length;
   $app.innerHTML = `
     ${pageHead({ title: '設定' })}
     ${AUTH_ENABLED && signedInUser ? `<section class="section">
@@ -1218,6 +1303,15 @@ function viewSettings() {
           <div class="segmented">${[['auto', '自動'], ['light', 'ライト'], ['dark', 'ダーク']].map(([v, l]) => `<button type="button" class="${s.theme === v ? 'on' : ''}" data-action="set-theme" data-value="${v}">${l}</button>`).join('')}</div>
         </div>
         <label class="switch-row"><span>${icon('speaker')}テスト中に英語を自動で読み上げる</span><input type="checkbox" id="auto-speak" ${s.autoSpeak ? 'checked' : ''}><i class="switch"></i></label>
+      </div>
+    </section>
+    <section class="section">
+      <h2 class="label">メンテナンス</h2>
+      <div class="card-plain">
+        <div class="menu-list flat">
+          <a href="#/cleanup">${icon('broom')}重複チェック・単語の整理${dupCount ? `<span class="tag warn">${dupCount}組</span>` : '<span class="tag">重複なし</span>'}</a>
+        </div>
+        <p class="hint">同じ単語の二重登録や、複数形・活用形・つづり違いで似ている単語を探して、1つにまとめます。端末内で処理するので無料です。${s.dupCheckedAt ? `前回の確認：${fmtDate(s.dupCheckedAt)}` : ''}</p>
       </div>
     </section>
     <section class="section">
@@ -1326,6 +1420,37 @@ const actions = {
     if (!pairs.length) return;
     await requireDeck();
     startReview(pairs, 'csv');
+  },
+  'snooze-dup': () => { S.setSetting('dupSnoozeUntil', Date.now() + 7 * 86400000); render(); toast('1週間後にもう一度お知らせします。設定の「メンテナンス」からいつでも確認できます', { duration: 5000 }); },
+  'dup-filter': (el) => { cleanUI.filter = el.dataset.filter; viewCleanup(); },
+  'dup-merge': (el) => {
+    const g = cleanGroups[+el.dataset.index];
+    const snap = g && mergeGroup(g);
+    if (!snap) return;
+    viewCleanup();
+    toast(`「${snap.keep.en}」に${snap.others.length + 1}語をまとめました`, { action: '元に戻す', duration: 6000, onAction: () => { S.undoMerge(snap); viewCleanup(); } });
+  },
+  'dup-keep': (el) => {
+    const g = cleanGroups[+el.dataset.index];
+    if (!g) return;
+    const ids = g.words.map((w) => w.id);
+    S.markNotDuplicate(ids);
+    viewCleanup();
+    toast('別の単語として残しました', { action: '元に戻す', onAction: () => { ids.forEach((id) => { const w = S.getWord(id); if (w) S.updateWord(id, { notDup: (w.notDup || []).filter((x) => !ids.includes(x)) }); }); viewCleanup(); } });
+  },
+  'merge-all-same': () => {
+    const groups = findDuplicates(S.getWords()).filter((g) => g.kind === 'same');
+    const n = groups.reduce((k, g) => k + g.words.length, 0);
+    confirmSheet({
+      title: '同じ単語をまとめて整理',
+      body: `つづりが同じ（大文字・記号・冠詞の違いだけ）${groups.length}組・${n}語を、それぞれ1語にまとめます。訳とメモは足し合わせ、学習記録も引き継ぎます。「似ている」の候補は対象外です。`,
+      confirmLabel: `${groups.length}組をまとめる`,
+      onConfirm: () => {
+        const snaps = groups.map(mergeGroup).filter(Boolean);
+        viewCleanup();
+        toast(`${snaps.length}組をまとめました`, { action: '元に戻す', duration: 8000, onAction: () => { [...snaps].reverse().forEach((sn) => S.undoMerge(sn)); viewCleanup(); } });
+      },
+    });
   },
   'ai-text': () => { if (!addUI.text.trim()) { toast('テキストを入力してください'); return; } runAI({ text: addUI.text }); },
   'remove-recent': (el) => { const id = el.closest('.word').dataset.id; S.deleteWord(id); addUI.recent = addUI.recent.filter((x) => x !== id); renderAddBody(); },

@@ -187,6 +187,47 @@ export function restoreWord(word) {
   save();
 }
 
+// 重複の整理：keepId に訳・メモ・学習記録を寄せて、ほかの単語を消す。元に戻すための控えを返す
+export function mergeWords(keepId, otherIds, patch) {
+  const keep = getWord(keepId);
+  const others = otherIds.map(getWord).filter(Boolean);
+  if (!keep || !others.length) return null;
+  const snapshot = { keep: structuredClone(keep), others: structuredClone(others) };
+  const all = [keep, ...others];
+  Object.assign(keep, patch, {
+    star: all.some((w) => w.star),
+    seen: all.reduce((n, w) => n + (w.seen || 0), 0),
+    correct: all.reduce((n, w) => n + (w.correct || 0), 0),
+    wrong: all.reduce((n, w) => n + (w.wrong || 0), 0),
+    // 片方でも苦手なら復習に出るよう、進み具合は低いほうに合わせる
+    box: Math.min(...all.map((w) => w.box || 0)),
+    due: Math.min(...all.map((w) => w.due || 0)),
+    last: Math.max(...all.map((w) => w.last || 0)),
+    notDup: [...new Set(all.flatMap((w) => w.notDup || []))].filter((id) => !all.some((w) => w.id === id)),
+  });
+  const drop = new Set(others.map((w) => w.id));
+  state.words = state.words.filter((w) => !drop.has(w.id));
+  save();
+  return snapshot;
+}
+
+export function undoMerge(snapshot) {
+  const i = state.words.findIndex((w) => w.id === snapshot.keep.id);
+  if (i >= 0) state.words[i] = snapshot.keep; else state.words.push(snapshot.keep);
+  const ids = new Set(state.words.map((w) => w.id));
+  state.words.push(...snapshot.others.filter((w) => !ids.has(w.id)));
+  save();
+}
+
+// 「別の単語」として、次回から重複の候補に出さない
+export function markNotDuplicate(ids) {
+  for (const id of ids) {
+    const w = getWord(id);
+    if (w) w.notDup = [...new Set([...(w.notDup || []), ...ids.filter((x) => x !== id)])];
+  }
+  save();
+}
+
 export function resetProgress(deckId) {
   getWords(deckId).forEach((w) => {
     Object.assign(w, { box: 0, seen: 0, correct: 0, wrong: 0, lastResult: null, last: 0, due: 0 });

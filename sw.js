@@ -1,6 +1,6 @@
 // オフライン対応：同一オリジンのGETを「ネットワーク優先・失敗時はキャッシュ」で返す
-const CACHE = 'tangocho-v7';
-const SHELL = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/store.js', 'js/parse.js', 'js/table.js', 'js/ai.js', 'js/draft.js', 'js/config.js', 'js/auth.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png'];
+const CACHE = 'tangocho-v8';
+const SHELL = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/store.js', 'js/parse.js', 'js/table.js', 'js/dupes.js', 'js/ai.js', 'js/draft.js', 'js/config.js', 'js/auth.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
